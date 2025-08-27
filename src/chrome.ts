@@ -1,0 +1,168 @@
+import { methodProxy } from "./proxy"
+
+function belongsToChannelSimple(message: unknown, channel: string): message is { channel: string, type: string } {
+    if (typeof message != "object")
+        return false
+
+    if (!message)
+        return false
+
+    if (!("channel" in message))
+        return false
+
+    if (!("type" in message))
+        return false
+
+    return message.channel === channel
+}
+
+function isRequest<T extends {}>(message: T): message is T & SimpleRequest<any[]> {
+    return "type" in message
+        && message.type === "request"
+        && "method" in message
+        && (typeof message.method == "string")
+        && "args" in message
+        && Array.isArray(message.args)
+}
+
+type SimpleRequest<Args extends any[]> = {
+    type: "request"
+    method: string
+    args: Args
+    channel: string
+}
+
+
+const isInvalidTabId = (tabId: number | undefined): tabId is undefined => {
+    return !tabId || tabId === chrome.tabs.TAB_ID_NONE
+}
+
+
+
+type MethodMapGeneric = Record<string, (...args: any[]) => any>
+
+type Method<Map extends MethodMapGeneric, Name extends keyof Map> = Map[Name]
+type Promisify<Method extends (...args: any[]) => any> = (...args: Parameters<Method>) => ReturnType<Method> | Promise<Awaited<ReturnType<Method>>>
+
+type HandlerMap<Map extends MethodMapGeneric> = {
+    [Name in keyof Map]: Promisify<Method<Map, Name>>[]
+}
+
+type UniversalHandler<Map extends MethodMapGeneric> = (name: keyof Map, args: MethodArgs<Map, typeof name>) => ReturnTypeOfMethod<Map, keyof Map>
+
+type MethodArgs<Map extends MethodMapGeneric, Name extends keyof Map> = Parameters<Method<Map, Name>>
+type ReturnTypeOfMethod<Map extends MethodMapGeneric, Name extends keyof Map> = ReturnType<Method<Map, Name>>
+
+export class Responder<IncomingMessages extends MethodMapGeneric> {
+    handlers: Partial<HandlerMap<IncomingMessages>> = {}
+
+    universalHandlers: UniversalHandler<IncomingMessages>[] = []
+
+    channel: string;
+
+    constructor(
+        channel: string,
+    ) {
+        this.channel = channel;
+        chrome.runtime.onMessage.addListener(this.onMessageEvent)
+    }
+    onMessageEvent = (msg: SimpleRequest<any[]>, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
+        if (!belongsToChannelSimple(msg, this.channel))
+            return
+        if (isRequest(msg))
+            this.handleRequest(msg, sender, sendResponse)
+        return true
+    }
+    async handleRequest(msg: SimpleRequest<any[]>, _: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) {
+        let response
+        for (let handler of this.universalHandlers)
+            response = await handler(msg.method, msg.args as MethodArgs<IncomingMessages, string>)
+
+        let handlers = this.handlers[msg.method]
+        if (handlers)
+            for (let handler of (handlers || []))
+                response = await handler(...msg.args as MethodArgs<IncomingMessages, string>)
+        else if (!this.universalHandlers.length)
+            return // console.log(`Responder.handleRequest[${this.channel}]: no handler for`, message.method)
+
+        sendResponse(response)
+    }
+    subscribe<Name extends keyof IncomingMessages>(name: Name, handler: Promisify<Method<IncomingMessages, Name>>) {
+        let handlers = (this.handlers[name] ||= [])
+        handlers.push(handler)
+        return () => removeFromArray(handlers, handler)
+    }
+    unsubscribe<Name extends keyof IncomingMessages>(name: Name, handler: Promisify<Method<IncomingMessages, Name>>) {
+        let handlers = this.handlers[name]
+        if (!handlers)
+            return
+
+        removeFromArray(handlers, handler)
+    }
+    subscribeUniversal(handler: UniversalHandler<IncomingMessages>) {
+        this.universalHandlers.push(handler)
+
+        return () => removeFromArray(this.universalHandlers, handler)
+    }
+    unsubscribeUniversal(handler: UniversalHandler<IncomingMessages>) {
+        removeFromArray(this.universalHandlers, handler)
+    }
+}
+function removeFromArray<T>(array: T[], item: T) {
+    let index = array.indexOf(item)
+    if (index == -1)
+        return
+
+    array.splice(index, 1)
+}
+
+export class Requester<OutgoingMessages extends MethodMapGeneric> {
+    channel: string;
+    queryInfo?: chrome.tabs.QueryInfo;
+
+    proxy = methodProxy<OutgoingMessages>((name, ...args) => this.call(name, ...args))
+
+    constructor(channel: string, queryInfo?: chrome.tabs.QueryInfo) {
+        this.channel = channel;
+        this.queryInfo = queryInfo;
+    }
+
+    private async broadcastToQueriedTabs<Name extends Extract<keyof OutgoingMessages, string>>(
+        queryInfo: chrome.tabs.QueryInfo,
+        name: Name,
+        ...args: MethodArgs<OutgoingMessages, Name>
+    ) {
+        chrome.tabs.query(queryInfo, (tabs) => {
+            tabs.forEach(tab => {
+                if (isInvalidTabId(tab.id))
+                    return
+                return this.callTab(tab.id, name, ...args)
+            });
+        });
+    }
+    call<Name extends Extract<keyof OutgoingMessages, string>>(name: Name, ...args: MethodArgs<OutgoingMessages, Name>): Promise<Awaited<ReturnTypeOfMethod<OutgoingMessages, Name>>> {
+        if (this.queryInfo) {
+            this.broadcastToQueriedTabs(this.queryInfo, name, ...args)
+        }
+        return chrome.runtime.sendMessage({
+            type: "request",
+            channel: this.channel,
+            method: name,
+            args
+        } satisfies SimpleRequest<any>)
+    }
+
+    callTab<Name extends Extract<keyof OutgoingMessages, string>>(
+        tabId: number,
+        name: Name,
+        ...args: MethodArgs<OutgoingMessages, Name>
+    ): Promise<Awaited<ReturnTypeOfMethod<OutgoingMessages, Name>>> {
+        return chrome.tabs.sendMessage(tabId, {
+            type: "request",
+            channel: this.channel,
+            method: name,
+            args
+        } satisfies SimpleRequest<any>)
+    }
+}
+
