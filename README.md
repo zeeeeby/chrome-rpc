@@ -90,9 +90,9 @@ When creating a Requester, you can specify `chrome.tabs.QueryInfo` to filter spe
 
 ```typescript
 const events = new Requester<Events>("events", {
-	active: true, // Only active tabs
-	currentWindow: true, // Only current window
-	url: ["*://*.github.com/*"], // Only GitHub tabs
+	active: true, 
+	currentWindow: true, 
+	url: ["*://*.github.com/*"], 
 })
 ```
 
