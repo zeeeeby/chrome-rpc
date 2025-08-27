@@ -1,8 +1,17 @@
-# Chrome RPC
+# RPC Chrome
 
 A simple library for typed messaging between different parts of a Chrome extension (background script, content script, popup, etc.) 
 
 No more subscribing to Chrome events or parsing message results - just write your methods and call them directly with full TypeScript support.  
+
+## Install
+```bash
+npm install rpc-chrome
+# or
+yarn add rpc-chrome
+# or
+pnpm add rpc-chrome
+```
 
 ## Usage Example
 

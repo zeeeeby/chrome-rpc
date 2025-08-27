@@ -1,5 +1,5 @@
 {
-  "name": "chrome-rpc",
+  "name": "rpc-chrome",
   "version": "1.0.1",
   "description": "",
   "main": "dist/index.js",
