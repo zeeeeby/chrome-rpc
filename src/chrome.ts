@@ -17,7 +17,8 @@ function belongsToChannelSimple(message: unknown, channel: string): message is {
 }
 
 function isRequest<T extends {}>(message: T): message is T & SimpleRequest<any[]> {
-    return "type" in message
+    if (!message) return false
+    return typeof message === "object" && "type" in message
         && message.type === "request"
         && "method" in message
         && (typeof message.method == "string")
@@ -25,11 +26,29 @@ function isRequest<T extends {}>(message: T): message is T & SimpleRequest<any[]
         && Array.isArray(message.args)
 }
 
+
+function isError<T extends {}>(message: T): message is T & SimpleError {
+    if (!message) return false
+
+    return typeof message === "object" && "type" in message
+        && message.type === "error"
+        && "error" in message
+}
+
 type SimpleRequest<Args extends any[]> = {
     type: "request"
     method: string
     args: Args
     channel: string
+}
+
+type SimpleError = {
+    channel: string
+    type: "error"
+    error: {
+        message: string
+        stack?: string
+    }
 }
 
 
@@ -74,18 +93,30 @@ export class Responder<IncomingMessages extends MethodMapGeneric> {
         return true
     }
     async handleRequest(msg: SimpleRequest<any[]>, _: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) {
-        let response
-        for (let handler of this.universalHandlers)
-            response = await handler(msg.method, msg.args as MethodArgs<IncomingMessages, string>)
+        try {
+            let response
+            for (let handler of this.universalHandlers)
+                response = await handler(msg.method, msg.args as MethodArgs<IncomingMessages, string>)
 
-        let handlers = this.handlers[msg.method]
-        if (handlers)
-            for (let handler of (handlers || []))
-                response = await handler(...msg.args as MethodArgs<IncomingMessages, string>)
-        else if (!this.universalHandlers.length)
-            return // console.log(`Responder.handleRequest[${this.channel}]: no handler for`, message.method)
-
-        sendResponse(response)
+            let handlers = this.handlers[msg.method]
+            if (handlers)
+                for (let handler of (handlers || []))
+                    response = await handler(...msg.args as MethodArgs<IncomingMessages, string>)
+            else if (!this.universalHandlers.length)
+                return
+            sendResponse(response)
+        }
+        catch (e) {
+            console.error(`Responder.handleRequest[${this.channel}]: error in handler for`, msg.method, e)
+            sendResponse({
+                type: "error",
+                channel: this.channel,
+                error: {
+                    message: (e as Error)?.message,
+                    stack: (e as Error)?.stack
+                }
+            } as SimpleError)
+        }
     }
     subscribe<Name extends keyof IncomingMessages>(name: Name, handler: Promisify<Method<IncomingMessages, Name>>) {
         let handlers = (this.handlers[name] ||= [])
@@ -149,7 +180,14 @@ export class Requester<OutgoingMessages extends MethodMapGeneric> {
             channel: this.channel,
             method: name,
             args
-        } satisfies SimpleRequest<any>)
+        } satisfies SimpleRequest<any>).then(response => {
+            if (isError(response)) {
+                let error = new Error(`Error in method ${name}: ${response.error?.message || "Unknown error"}`)
+                error.stack = response.error?.stack
+                throw error
+            }
+            return response as Awaited<ReturnTypeOfMethod<OutgoingMessages, Name>>
+        })
     }
 
     callTab<Name extends Extract<keyof OutgoingMessages, string>>(
@@ -162,7 +200,14 @@ export class Requester<OutgoingMessages extends MethodMapGeneric> {
             channel: this.channel,
             method: name,
             args
-        } satisfies SimpleRequest<any>)
+        } satisfies SimpleRequest<any>).then(response => {
+            if (isError(response)) {
+                let error = new Error(`Error in method ${name}: ${response.error?.message || "Unknown error"}`)
+                error.stack = response.error?.stack
+                throw error
+            }
+            return response as Awaited<ReturnTypeOfMethod<OutgoingMessages, Name>>
+        })
     }
 }
 
