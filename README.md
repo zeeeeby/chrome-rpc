@@ -84,7 +84,19 @@ events.subscribe("themeChanged", (theme) => {
 })
 ```
 
-## Tab Filtering
+## Configuration Options
+
+### External Messages
+
+When creating a Responder, you can enable handling of external messages from other extensions:
+
+```typescript
+const methodsApi = new Responder<Methods>("methods", { external: true })
+```
+
+This allows other extensions or websites to call your methods using `chrome.runtime.sendMessage`.
+
+### Tab Filtering
 
 When creating a Requester, you can specify `chrome.tabs.QueryInfo` to filter specific tabs:
 

@@ -81,9 +81,13 @@ export class Responder<IncomingMessages extends MethodMapGeneric> {
 
     constructor(
         channel: string,
+        config: { external: boolean } = { external: false }
     ) {
         this.channel = channel;
         chrome.runtime.onMessage.addListener(this.onMessageEvent)
+        if (config.external) {
+            chrome.runtime.onMessageExternal.addListener(this.onMessageEvent)
+        }
     }
     onMessageEvent = (msg: SimpleRequest<any[]>, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
         if (!belongsToChannelSimple(msg, this.channel))
